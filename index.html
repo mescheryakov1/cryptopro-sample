@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Получение тестового сертификата КриптоПро — только PKCS#11</title>
+  <script src="https://www.cryptopro.ru/sites/default/files/products/cades/cadesplugin_api.js"></script>
+  <style>
+    :root { font-family: Arial, Helvetica, sans-serif; color: #202124; background: #f5f6f7; }
+    body { margin: 0; }
+    main { max-width: 900px; margin: 32px auto; padding: 0 18px 48px; }
+    h1 { font-size: 26px; font-weight: 600; margin: 0 0 10px; }
+    h2 { font-size: 18px; margin: 0 0 14px; }
+    p { line-height: 1.45; }
+    .card { background: #fff; border: 1px solid #d8dadd; border-radius: 8px; padding: 18px; margin: 16px 0; }
+    .notice { background: #fff8d9; border-color: #ead48b; }
+    .ok { color: #137333; }
+    .error { color: #b3261e; }
+    .muted { color: #5f6368; }
+    label { display: block; margin: 10px 0 6px; font-weight: 600; }
+    input[type="text"], textarea {
+      width: 100%; box-sizing: border-box; font: inherit; padding: 10px;
+      border: 1px solid #b8bcc2; border-radius: 5px; background: #fff;
+    }
+    textarea { min-height: 190px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+    button, .button-link {
+      display: inline-block; box-sizing: border-box; font: inherit; padding: 9px 14px;
+      border: 1px solid #8a8f98; border-radius: 5px; background: #f8f9fa; color: #202124;
+      text-decoration: none; cursor: pointer; margin: 4px 8px 4px 0;
+    }
+    button.primary { background: #1a73e8; border-color: #1a73e8; color: white; }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .status-grid { display: grid; grid-template-columns: 190px 1fr; gap: 8px 14px; }
+    .actions { margin-top: 12px; }
+    @media (max-width: 650px) { .status-grid { grid-template-columns: 1fr; gap: 2px; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Получение личного тестового сертификата</h1>
+  <p class="muted">Тестовая страница для КриптоПро ЭЦП Browser Plug-in. При создании ключевого контейнера разрешаются только считыватели, имя которых начинается с <code>pkcs11_</code>.</p>
+
+  <section class="card notice">
+    <strong>Фильтр:</strong> <code>^pkcs11_.*</code><br>
+    Перед созданием ключевой пары вызывается <code>CAdESCOM.About.ReaderFilter</code>. Все считыватели, не попавшие под регулярное выражение, полностью запрещаются для этой операции.
+  </section>
+
+  <section class="card">
+    <h2>Диагностика</h2>
+    <div class="status-grid">
+      <div>Browser Plug-in</div><div id="pluginStatus" class="muted">ожидание загрузки</div>
+      <div>КриптоПро CSP</div><div id="cspStatus" class="muted">ожидание загрузки</div>
+      <div>ReaderFilter</div><div id="filterStatus" class="muted">ещё не применён</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>1. Создать ключ и запрос PKCS#10</h2>
+    <label for="commonName">Имя владельца (CN)</label>
+    <input id="commonName" type="text" value="Test User">
+    <div class="actions">
+      <button id="createRequest" class="primary" type="button" disabled>Получить личный тестовый сертификат</button>
+    </div>
+    <p id="requestStatus" class="muted"></p>
+
+    <label for="requestOut">Запрос PKCS#10</label>
+    <textarea id="requestOut" readonly placeholder="После выбора носителя здесь появится запрос PKCS#10"></textarea>
+    <div class="actions">
+      <button id="copyRequest" type="button" disabled>Скопировать запрос</button>
+      <a class="button-link" href="https://testgost2012.cryptopro.ru/certsrv/" target="_blank" rel="noopener">Открыть тестовый УЦ (HTTPS)</a>
+      <a class="button-link" href="http://testgost2012.cryptopro.ru/certsrv/" target="_blank" rel="noopener">Открыть тестовый УЦ (HTTP)</a>
+    </div>
+    <p class="muted">В тестовом УЦ выберите отправку готового запроса PKCS#10/PKCS#7, вставьте созданный запрос и получите сертификат. HTTPS-вариант тестового УЦ требует браузер с поддержкой ГОСТ TLS; при необходимости используйте HTTP-вариант.</p>
+  </section>
+
+  <section class="card">
+    <h2>2. Установить выданный сертификат</h2>
+    <label for="responseIn">Ответ УЦ / сертификат в Base64</label>
+    <textarea id="responseIn" placeholder="Вставьте полученный от тестового УЦ сертификат или PKCS#7 в Base64"></textarea>
+    <div class="actions">
+      <button id="installResponse" type="button" disabled>Установить сертификат</button>
+    </div>
+    <p id="installStatus" class="muted"></p>
+  </section>
+
+  <section class="card">
+    <h2>Что именно проверяется</h2>
+    <p>Фильтр применяется непосредственно перед созданием объекта закрытого ключа и запроса сертификата. Диалог выбора носителя принудительно показывается через <code>ForceReaderDialog</code>. Ожидаемый результат: в диалоге КриптоПро доступны только режимы считывателей вида <code>pkcs11_...</code>; CSP/FKC-режимы того же Рутокена не должны быть доступны.</p>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  const READER_REGEXP = "^pkcs11_.*";
+  const PROVIDER_NAME = "Crypto-Pro GOST R 34.10-2012 Cryptographic Service Provider";
+  const PROVIDER_TYPE = 80;
+
+  const pluginStatus = document.getElementById("pluginStatus");
+  const cspStatus = document.getElementById("cspStatus");
+  const filterStatus = document.getElementById("filterStatus");
+  const requestStatus = document.getElementById("requestStatus");
+  const installStatus = document.getElementById("installStatus");
+  const commonName = document.getElementById("commonName");
+  const requestOut = document.getElementById("requestOut");
+  const responseIn = document.getElementById("responseIn");
+  const createRequestBtn = document.getElementById("createRequest");
+  const copyRequestBtn = document.getElementById("copyRequest");
+  const installResponseBtn = document.getElementById("installResponse");
+
+  function setText(el, text, kind) {
+    el.textContent = text;
+    el.className = kind || "muted";
+  }
+
+  function lastError(e) {
+    try {
+      if (window.cadesplugin && cadesplugin.getLastError) return cadesplugin.getLastError(e);
+    } catch (_) {}
+    return e && (e.message || e.toString()) || "неизвестная ошибка";
+  }
+
+  function waitPlugin() {
+    return new Promise(function (resolve, reject) {
+      if (!window.cadesplugin) {
+        reject(new Error("Не загружен cadesplugin_api.js"));
+        return;
+      }
+      if (typeof cadesplugin.then === "function") {
+        cadesplugin.then(resolve, reject);
+      } else {
+        resolve();
+      }
+    });
+  }
+
+  async function versionToString(v) {
+    try {
+      const s = await v.toString();
+      if (s && s !== "[object Object]") return s;
+    } catch (_) {}
+    try {
+      return [await v.MajorVersion, await v.MinorVersion, await v.BuildVersion].join(".");
+    } catch (_) {
+      return "не определена";
+    }
+  }
+
+  async function applyReaderFilter() {
+    const about = await cadesplugin.CreateObjectAsync("CAdESCOM.About");
+    const enabledTypes = cadesplugin.ENABLE_ANY_CARRIER_TYPE !== undefined
+      ? cadesplugin.ENABLE_ANY_CARRIER_TYPE : 0x07;
+    const blockedOperations = cadesplugin.DISABLE_EVERY_CARRIER_OPERATION !== undefined
+      ? cadesplugin.DISABLE_EVERY_CARRIER_OPERATION : 0x00;
+
+    await about.ReaderFilter(enabledTypes, blockedOperations, READER_REGEXP);
+    setText(filterStatus, "активен: " + READER_REGEXP, "ok");
+    return about;
+  }
+
+  async function init() {
+    try {
+      await waitPlugin();
+      const about = await cadesplugin.CreateObjectAsync("CAdESCOM.About");
+
+      try {
+        setText(pluginStatus, "загружен, версия " + await versionToString(await about.PluginVersion), "ok");
+      } catch (_) {
+        setText(pluginStatus, "загружен", "ok");
+      }
+
+      try {
+        const cspVersion = await about.CSPVersion("", PROVIDER_TYPE);
+        let name = PROVIDER_NAME;
+        try { name = await about.CSPName(PROVIDER_TYPE); } catch (_) {}
+        setText(cspStatus, name + ", версия " + await versionToString(cspVersion), "ok");
+      } catch (_) {
+        setText(cspStatus, "CSP доступен", "ok");
+      }
+
+      createRequestBtn.disabled = false;
+      installResponseBtn.disabled = false;
+    } catch (e) {
+      setText(pluginStatus, "ошибка: " + lastError(e), "error");
+      setText(cspStatus, "недоступен", "error");
+    }
+  }
+
+  createRequestBtn.addEventListener("click", function () {
+    createRequestBtn.disabled = true;
+    requestOut.value = "";
+    copyRequestBtn.disabled = true;
+    setText(requestStatus, "Применяю фильтр считывателей…", "muted");
+
+    cadesplugin.async_spawn(function* () {
+      try {
+        const about = yield cadesplugin.CreateObjectAsync("CAdESCOM.About");
+        const enabledTypes = cadesplugin.ENABLE_ANY_CARRIER_TYPE !== undefined
+          ? cadesplugin.ENABLE_ANY_CARRIER_TYPE : 0x07;
+        const blockedOperations = cadesplugin.DISABLE_EVERY_CARRIER_OPERATION !== undefined
+          ? cadesplugin.DISABLE_EVERY_CARRIER_OPERATION : 0x00;
+
+        yield about.ReaderFilter(enabledTypes, blockedOperations, READER_REGEXP);
+        setText(filterStatus, "активен: " + READER_REGEXP, "ok");
+        setText(requestStatus, "Фильтр установлен. Создаю запрос и открываю диалог выбора носителя…", "muted");
+
+        const pkey = yield cadesplugin.CreateObjectAsync("X509Enrollment.CX509PrivateKey");
+        yield pkey.propset_ProviderName(PROVIDER_NAME);
+        yield pkey.propset_ProviderType(PROVIDER_TYPE);
+        yield pkey.propset_KeySpec(cadesplugin.AT_KEYEXCHANGE);
+
+        const pkcs10 = yield cadesplugin.CreateObjectAsync("X509Enrollment.CX509CertificateRequestPkcs10");
+        yield pkcs10.InitializeFromPrivateKey(cadesplugin.ContextUser || 0x1, pkey, "");
+
+        const dn = yield cadesplugin.CreateObjectAsync("X509Enrollment.CX500DistinguishedName");
+        const safeCN = (commonName.value || "Test User").replace(/"/g, "");
+        yield dn.Encode('CN="' + safeCN + '"');
+        yield pkcs10.propset_Subject(dn);
+
+        const keyUsage = yield cadesplugin.CreateObjectAsync("X509Enrollment.CX509ExtensionKeyUsage");
+        const CERT_DATA_ENCIPHERMENT_KEY_USAGE = 0x10;
+        const CERT_KEY_ENCIPHERMENT_KEY_USAGE = 0x20;
+        const CERT_NON_REPUDIATION_KEY_USAGE = 0x40;
+        const CERT_DIGITAL_SIGNATURE_KEY_USAGE = 0x80;
+        yield keyUsage.InitializeEncode(
+          CERT_DATA_ENCIPHERMENT_KEY_USAGE |
+          CERT_KEY_ENCIPHERMENT_KEY_USAGE |
+          CERT_NON_REPUDIATION_KEY_USAGE |
+          CERT_DIGITAL_SIGNATURE_KEY_USAGE
+        );
+        const extensions = yield pkcs10.X509Extensions;
+        yield extensions.Add(keyUsage);
+
+        const enroll = yield cadesplugin.CreateObjectAsync("X509Enrollment.CX509Enrollment");
+        yield enroll.InitializeFromRequest(pkcs10);
+        try { yield enroll.propset_ForceReaderDialog(true); } catch (_) {}
+
+        const encoding = cadesplugin.XCN_CRYPT_STRING_BASE64HEADER !== undefined
+          ? cadesplugin.XCN_CRYPT_STRING_BASE64HEADER : 0x0;
+        const request = yield enroll.CreateRequest(encoding);
+
+        requestOut.value = request;
+        copyRequestBtn.disabled = false;
+        setText(requestStatus, "Запрос PKCS#10 создан. Закрытый ключ создан на выбранном носителе.", "ok");
+      } catch (e) {
+        setText(requestStatus, "Ошибка: " + lastError(e), "error");
+      } finally {
+        createRequestBtn.disabled = false;
+      }
+    });
+  });
+
+  copyRequestBtn.addEventListener("click", async function () {
+    try {
+      await navigator.clipboard.writeText(requestOut.value);
+      setText(requestStatus, "Запрос скопирован в буфер обмена.", "ok");
+    } catch (_) {
+      requestOut.focus();
+      requestOut.select();
+      document.execCommand("copy");
+      setText(requestStatus, "Запрос скопирован в буфер обмена.", "ok");
+    }
+  });
+
+  installResponseBtn.addEventListener("click", function () {
+    const response = responseIn.value.trim();
+    if (!response) {
+      setText(installStatus, "Сначала вставьте ответ УЦ.", "error");
+      return;
+    }
+
+    installResponseBtn.disabled = true;
+    setText(installStatus, "Устанавливаю сертификат…", "muted");
+
+    cadesplugin.async_spawn(function* () {
+      try {
+        const enroll = yield cadesplugin.CreateObjectAsync("X509Enrollment.CX509Enrollment");
+        yield enroll.Initialize(cadesplugin.ContextUser || 0x1);
+
+        const restrictions = cadesplugin.CADESCOM_AllowNone !== undefined
+          ? cadesplugin.CADESCOM_AllowNone : 0;
+        const encoding = cadesplugin.XCN_CRYPT_STRING_BASE64_ANY !== undefined
+          ? cadesplugin.XCN_CRYPT_STRING_BASE64_ANY : 0x6;
+
+        yield enroll.InstallResponse(restrictions, response, encoding, "");
+        setText(installStatus, "Сертификат установлен.", "ok");
+      } catch (e) {
+        setText(installStatus, "Ошибка: " + lastError(e), "error");
+      } finally {
+        installResponseBtn.disabled = false;
+      }
+    });
+  });
+
+  init();
+})();
+</script>
+</body>
+</html>
