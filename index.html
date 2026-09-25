@@ -280,7 +280,7 @@
           const nickName = yield readerMode.NickName;
           const media = yield readerMode.Media;
 
-          if (typeof name === "string" && name.toLowerCase().startsWith("pkcs11_")) {
+          if (typeof media === "string" && media.toLowerCase().startsWith("pkcs11_")) {
             pkcs11Readers.push({
               name: name,
               nickName: nickName,
@@ -293,18 +293,32 @@
           throw new Error("Не найден ни один считыватель, имя которого начинается с pkcs11_.");
         }
 
-        const selectedReader = pkcs11Readers[0].name;
+        const selectedMode = pkcs11Readers[0];
+        const selectedReader = selectedMode.name;
         const suffix = pkcs11Readers.length > 1
           ? " (найдено " + pkcs11Readers.length + ", выбран первый)"
           : "";
-        setText(readerStatus, selectedReader + suffix, "ok");
-        setText(requestStatus, "Считыватель выбран программно. Создаю ключ без окна выбора носителя…", "muted");
+        setText(
+          readerStatus,
+          "Name: " + selectedMode.name +
+          " | NickName: " + selectedMode.nickName +
+          " | Media: " + selectedMode.media + suffix,
+          "ok"
+        );
+        setText(
+          requestStatus,
+          "PKCS#11-режим найден по Media=" + selectedMode.media +
+          ". Передаю ReaderName=" + selectedReader +
+          " и создаю ключ без окна выбора носителя…",
+          "muted"
+        );
 
         const pkey = yield cadesplugin.CreateObjectAsync("X509Enrollment.CX509PrivateKey");
         yield pkey.propset_ProviderName(PROVIDER_NAME);
         yield pkey.propset_ProviderType(PROVIDER_TYPE);
         yield pkey.propset_KeySpec(cadesplugin.AT_KEYEXCHANGE);
         yield pkey.propset_ReaderName(selectedReader);
+        try { yield pkey.propset_Silent(true); } catch (_) {}
 
         const pkcs10 = yield cadesplugin.CreateObjectAsync("X509Enrollment.CX509CertificateRequestPkcs10");
         yield pkcs10.InitializeFromPrivateKey(cadesplugin.ContextUser || 0x1, pkey, "");
@@ -330,7 +344,6 @@
 
         const enroll = yield cadesplugin.CreateObjectAsync("X509Enrollment.CX509Enrollment");
         yield enroll.InitializeFromRequest(pkcs10);
-        try { yield enroll.propset_Silent(true); } catch (_) {}
 
         const encoding = cadesplugin.XCN_CRYPT_STRING_BASE64HEADER !== undefined
           ? cadesplugin.XCN_CRYPT_STRING_BASE64HEADER : 0x0;
@@ -338,9 +351,14 @@
 
         requestOut.value = request;
         copyRequestBtn.disabled = false;
-        setText(requestStatus, "Запрос PKCS#10 создан без окна выбора носителя. Использован считыватель: " + selectedReader, "ok");
+        setText(
+          requestStatus,
+          "Запрос PKCS#10 создан без окна выбора носителя. ReaderName=" +
+          selectedReader + ", Media=" + selectedMode.media,
+          "ok"
+        );
       } catch (e) {
-        setText(readerStatus, "ошибка", "error");
+        setText(readerStatus, "ошибка: " + lastError(e), "error");
         setText(requestStatus, "Ошибка: " + lastError(e), "error");
       } finally {
         createRequestAutoBtn.disabled = false;
