@@ -52,6 +52,7 @@
       <div>Browser Plug-in</div><div id="pluginStatus" class="muted">ожидание загрузки</div>
       <div>КриптоПро CSP</div><div id="cspStatus" class="muted">ожидание загрузки</div>
       <div>ReaderFilter</div><div id="filterStatus" class="muted">ещё не применён</div>
+      <div>PKCS#11-считыватель</div><div id="readerStatus" class="muted">ещё не выбран</div>
     </div>
   </section>
 
@@ -61,7 +62,9 @@
     <input id="commonName" type="text" value="Test User">
     <div class="actions">
       <button id="createRequest" class="primary" type="button" disabled>Получить личный тестовый сертификат</button>
+      <button id="createRequestAuto" type="button" disabled>Выбор Рутокена без реестра и флешек</button>
     </div>
+    <p class="muted">Вторая кнопка сама получает список режимов считывателей, оставляет только имена, начинающиеся с <code>pkcs11_</code>, и передаёт полное имя найденного считывателя в <code>CX509PrivateKey.ReaderName</code>. Окно выбора носителя не вызывается.</p>
     <p id="requestStatus" class="muted"></p>
 
     <label for="requestOut">Запрос PKCS#10</label>
@@ -86,7 +89,7 @@
 
   <section class="card">
     <h2>Что именно проверяется</h2>
-    <p>Фильтр применяется непосредственно перед созданием объекта закрытого ключа и запроса сертификата. Диалог выбора носителя принудительно показывается через <code>ForceReaderDialog</code>. Ожидаемый результат: в диалоге КриптоПро доступны только режимы считывателей вида <code>pkcs11_...</code>; CSP/FKC-режимы того же Рутокена не должны быть доступны.</p>
+    <p>Первая кнопка проверяет сценарий с <code>ReaderFilter</code> и системным окном выбора носителя. Вторая кнопка работает без этого окна: получает режимы считывателей через <code>CCspInformation.GetReaderModes()</code>, фильтрует их по префиксу <code>pkcs11_</code>, выбирает первый найденный режим и задаёт его полное имя в <code>CX509PrivateKey.ReaderName</code> перед созданием ключа.</p>
   </section>
 </main>
 
@@ -101,12 +104,14 @@
   const pluginStatus = document.getElementById("pluginStatus");
   const cspStatus = document.getElementById("cspStatus");
   const filterStatus = document.getElementById("filterStatus");
+  const readerStatus = document.getElementById("readerStatus");
   const requestStatus = document.getElementById("requestStatus");
   const installStatus = document.getElementById("installStatus");
   const commonName = document.getElementById("commonName");
   const requestOut = document.getElementById("requestOut");
   const responseIn = document.getElementById("responseIn");
   const createRequestBtn = document.getElementById("createRequest");
+  const createRequestAutoBtn = document.getElementById("createRequestAuto");
   const copyRequestBtn = document.getElementById("copyRequest");
   const installResponseBtn = document.getElementById("installResponse");
 
@@ -181,6 +186,7 @@
       }
 
       createRequestBtn.disabled = false;
+      createRequestAutoBtn.disabled = false;
       installResponseBtn.disabled = false;
     } catch (e) {
       setText(pluginStatus, "ошибка: " + lastError(e), "error");
@@ -248,6 +254,96 @@
         setText(requestStatus, "Ошибка: " + lastError(e), "error");
       } finally {
         createRequestBtn.disabled = false;
+      }
+    });
+  });
+
+  createRequestAutoBtn.addEventListener("click", function () {
+    createRequestAutoBtn.disabled = true;
+    requestOut.value = "";
+    copyRequestBtn.disabled = true;
+    setText(readerStatus, "получаю список считывателей…", "muted");
+    setText(requestStatus, "Ищу режимы считывателей с префиксом pkcs11_…", "muted");
+
+    cadesplugin.async_spawn(function* () {
+      try {
+        const cspInformation = yield cadesplugin.CreateObjectAsync("X509Enrollment.CCspInformation");
+        yield cspInformation.InitializeFromName(PROVIDER_NAME);
+
+        const readerModes = yield cspInformation.GetReaderModes();
+        const readerCount = yield readerModes.Count;
+        const pkcs11Readers = [];
+
+        for (let i = 0; i < readerCount; i++) {
+          const readerMode = yield readerModes.ItemByIndex(i);
+          const name = yield readerMode.Name;
+          const nickName = yield readerMode.NickName;
+          const media = yield readerMode.Media;
+
+          if (typeof name === "string" && name.toLowerCase().startsWith("pkcs11_")) {
+            pkcs11Readers.push({
+              name: name,
+              nickName: nickName,
+              media: media
+            });
+          }
+        }
+
+        if (pkcs11Readers.length === 0) {
+          throw new Error("Не найден ни один считыватель, имя которого начинается с pkcs11_.");
+        }
+
+        const selectedReader = pkcs11Readers[0].name;
+        const suffix = pkcs11Readers.length > 1
+          ? " (найдено " + pkcs11Readers.length + ", выбран первый)"
+          : "";
+        setText(readerStatus, selectedReader + suffix, "ok");
+        setText(requestStatus, "Считыватель выбран программно. Создаю ключ без окна выбора носителя…", "muted");
+
+        const pkey = yield cadesplugin.CreateObjectAsync("X509Enrollment.CX509PrivateKey");
+        yield pkey.propset_ProviderName(PROVIDER_NAME);
+        yield pkey.propset_ProviderType(PROVIDER_TYPE);
+        yield pkey.propset_KeySpec(cadesplugin.AT_KEYEXCHANGE);
+        yield pkey.propset_ReaderName(selectedReader);
+
+        const pkcs10 = yield cadesplugin.CreateObjectAsync("X509Enrollment.CX509CertificateRequestPkcs10");
+        yield pkcs10.InitializeFromPrivateKey(cadesplugin.ContextUser || 0x1, pkey, "");
+
+        const dn = yield cadesplugin.CreateObjectAsync("X509Enrollment.CX500DistinguishedName");
+        const safeCN = (commonName.value || "Test User").replace(/"/g, "");
+        yield dn.Encode('CN="' + safeCN + '"');
+        yield pkcs10.propset_Subject(dn);
+
+        const keyUsage = yield cadesplugin.CreateObjectAsync("X509Enrollment.CX509ExtensionKeyUsage");
+        const CERT_DATA_ENCIPHERMENT_KEY_USAGE = 0x10;
+        const CERT_KEY_ENCIPHERMENT_KEY_USAGE = 0x20;
+        const CERT_NON_REPUDIATION_KEY_USAGE = 0x40;
+        const CERT_DIGITAL_SIGNATURE_KEY_USAGE = 0x80;
+        yield keyUsage.InitializeEncode(
+          CERT_DATA_ENCIPHERMENT_KEY_USAGE |
+          CERT_KEY_ENCIPHERMENT_KEY_USAGE |
+          CERT_NON_REPUDIATION_KEY_USAGE |
+          CERT_DIGITAL_SIGNATURE_KEY_USAGE
+        );
+        const extensions = yield pkcs10.X509Extensions;
+        yield extensions.Add(keyUsage);
+
+        const enroll = yield cadesplugin.CreateObjectAsync("X509Enrollment.CX509Enrollment");
+        yield enroll.InitializeFromRequest(pkcs10);
+        try { yield enroll.propset_Silent(true); } catch (_) {}
+
+        const encoding = cadesplugin.XCN_CRYPT_STRING_BASE64HEADER !== undefined
+          ? cadesplugin.XCN_CRYPT_STRING_BASE64HEADER : 0x0;
+        const request = yield enroll.CreateRequest(encoding);
+
+        requestOut.value = request;
+        copyRequestBtn.disabled = false;
+        setText(requestStatus, "Запрос PKCS#10 создан без окна выбора носителя. Использован считыватель: " + selectedReader, "ok");
+      } catch (e) {
+        setText(readerStatus, "ошибка", "error");
+        setText(requestStatus, "Ошибка: " + lastError(e), "error");
+      } finally {
+        createRequestAutoBtn.disabled = false;
       }
     });
   });
