@@ -64,7 +64,7 @@
       <button id="createRequest" class="primary" type="button" disabled>Получить личный тестовый сертификат</button>
       <button id="createRequestAuto" type="button" disabled>Выбор Рутокена без реестра и флешек</button>
     </div>
-    <p class="muted">Вторая кнопка сама получает список режимов считывателей, оставляет только имена, начинающиеся с <code>pkcs11_</code>, и передаёт полное имя найденного считывателя в <code>CX509PrivateKey.ReaderName</code>. Окно выбора носителя не вызывается.</p>
+    <p class="muted">Вторая кнопка сама получает список режимов считывателей, выбирает режим, у которого <code>Media</code> начинается с <code>pkcs11_</code>, формирует полное имя нового контейнера вида <code>\\.\&lt;ReaderMode.Name&gt;\&lt;UUID&gt;</code> и передаёт его в <code>CX509PrivateKey.ContainerName</code>. Окно выбора носителя не вызывается.</p>
     <p id="requestStatus" class="muted"></p>
 
     <label for="requestOut">Запрос PKCS#10</label>
@@ -89,7 +89,7 @@
 
   <section class="card">
     <h2>Что именно проверяется</h2>
-    <p>Первая кнопка проверяет сценарий с <code>ReaderFilter</code> и системным окном выбора носителя. Вторая кнопка работает без этого окна: получает режимы считывателей через <code>CCspInformation.GetReaderModes()</code>, фильтрует их по префиксу <code>pkcs11_</code>, выбирает первый найденный режим и задаёт его полное имя в <code>CX509PrivateKey.ReaderName</code> перед созданием ключа.</p>
+    <p>Первая кнопка проверяет сценарий с <code>ReaderFilter</code> и системным окном выбора носителя. Вторая кнопка работает без этого окна: получает режимы считывателей через <code>CCspInformation.GetReaderModes()</code>, фильтрует по <code>Media</code> с префиксом <code>pkcs11_</code>, берёт <code>Name</code> найденного режима, формирует FQCN нового контейнера и задаёт его через <code>CX509PrivateKey.ContainerName</code>.</p>
   </section>
 </main>
 
@@ -294,22 +294,29 @@
         }
 
         const selectedMode = pkcs11Readers[0];
-        const selectedReader = selectedMode.name;
         const suffix = pkcs11Readers.length > 1
           ? " (найдено " + pkcs11Readers.length + ", выбран первый)"
           : "";
+
+        const containerId = (window.crypto && typeof window.crypto.randomUUID === "function")
+          ? window.crypto.randomUUID()
+          : "web-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+
+        const fullContainerName = "\\\\.\\" + selectedMode.name + "\\" + containerId;
+
         setText(
           readerStatus,
           "Name: " + selectedMode.name +
           " | NickName: " + selectedMode.nickName +
-          " | Media: " + selectedMode.media + suffix,
+          " | Media: " + selectedMode.media +
+          " | ContainerName: " + fullContainerName + suffix,
           "ok"
         );
         setText(
           requestStatus,
           "PKCS#11-режим найден по Media=" + selectedMode.media +
-          ". Передаю ReaderName=" + selectedReader +
-          " и создаю ключ без окна выбора носителя…",
+          ". Создаю контейнер " + fullContainerName +
+          " без окна выбора носителя…",
           "muted"
         );
 
@@ -317,8 +324,7 @@
         yield pkey.propset_ProviderName(PROVIDER_NAME);
         yield pkey.propset_ProviderType(PROVIDER_TYPE);
         yield pkey.propset_KeySpec(cadesplugin.AT_KEYEXCHANGE);
-        yield pkey.propset_ReaderName(selectedReader);
-        try { yield pkey.propset_Silent(true); } catch (_) {}
+        yield pkey.propset_ContainerName(fullContainerName);
 
         const pkcs10 = yield cadesplugin.CreateObjectAsync("X509Enrollment.CX509CertificateRequestPkcs10");
         yield pkcs10.InitializeFromPrivateKey(cadesplugin.ContextUser || 0x1, pkey, "");
@@ -353,8 +359,8 @@
         copyRequestBtn.disabled = false;
         setText(
           requestStatus,
-          "Запрос PKCS#10 создан без окна выбора носителя. ReaderName=" +
-          selectedReader + ", Media=" + selectedMode.media,
+          "Запрос PKCS#10 создан без окна выбора носителя. ContainerName=" +
+          fullContainerName + ", Media=" + selectedMode.media,
           "ok"
         );
       } catch (e) {
